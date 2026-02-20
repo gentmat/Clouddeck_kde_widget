@@ -1,0 +1,21 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "maroun.tanos@gmail.com",
+                "Name": "Maroun"
+            }
+        ],
+        "BugReportUrl": "mailto:maroun.tanos@gmail.com",
+        "Category": "Utilities",
+        "Description": "Configurable shutdown-aware countdown timer with warning beeps.",
+        "EnabledByDefault": true,
+        "Icon": "chronometer",
+        "Id": "com.clouddeck.sessioncountdown",
+        "License": "MIT",
+        "Name": "clouddeck session countdown",
+        "Version": "1.0-beta"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
