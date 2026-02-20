@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0
+
+- First stable release (promoted from 1.0-beta)
+- No functional changes from the latest beta package
+
 ## 1.0-beta
 
 - Initial public beta release

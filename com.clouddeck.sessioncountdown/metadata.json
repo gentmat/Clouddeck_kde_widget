@@ -15,7 +15,7 @@
         "Id": "com.clouddeck.sessioncountdown",
         "License": "MIT",
         "Name": "clouddeck session countdown",
-        "Version": "1.0-beta"
+        "Version": "1.0"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
 }

@@ -14,7 +14,7 @@ KDE Plasma 6 widget with:
 
 ## Version
 
-`1.0-beta`
+`1.0`
 
 ## Author
 

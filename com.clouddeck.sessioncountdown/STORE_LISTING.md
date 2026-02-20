@@ -6,7 +6,7 @@ clouddeck session countdown
 
 ## Version
 
-1.0-beta
+1.0
 
 ## Short Description
 
@@ -26,10 +26,10 @@ Features:
 
 Plugin ID: `com.clouddeck.sessioncountdown`
 
-## Release Notes (1.0-beta)
+## Release Notes (1.0)
 
-- Initial public beta release
-- Added configurable timer duration
-- Added dynamic warning points with beep notifications
-- Added shutdown/reboot-aware boot anchor logic
-- Added transparent style and responsive text scaling
+- First stable release (promoted from 1.0-beta)
+- Configurable timer duration
+- Dynamic warning points with beep notifications
+- Shutdown/reboot-aware boot anchor logic
+- Transparent style and responsive text scaling
