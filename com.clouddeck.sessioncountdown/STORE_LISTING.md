@@ -6,7 +6,7 @@ clouddeck session countdown
 
 ## Version
 
-1.0
+1.2
 
 ## Short Description
 
@@ -20,16 +20,14 @@ Features:
 
 - Configurable duration (hours + minutes)
 - Dynamic warning list (`+` / `-`) in minutes before end
-- Configurable beep duration for warning alerts
+- Warning alarms can be enabled/disabled
 - Boot-aware countdown anchoring
 - Transparent display with responsive auto-sized text
 
 Plugin ID: `com.clouddeck.sessioncountdown`
 
-## Release Notes (1.0)
+## Release Notes (1.2)
 
-- First stable release (promoted from 1.0-beta)
-- Configurable timer duration
-- Dynamic warning points with beep notifications
-- Shutdown/reboot-aware boot anchor logic
-- Transparent style and responsive text scaling
+- Fixed alarm playback in user installs by preferring bundled WAV playback
+- Kept MP3 playback as fallback for runtime compatibility
+- Added bundled `beep.wav` to improve alarm reliability across systems

@@ -20,10 +20,16 @@ PlasmoidItem {
 
     readonly property string bootAnchorScriptPath: localPathFromUrl(Qt.resolvedUrl("../scripts/boot_anchor_from_shutdown.sh"))
     readonly property string currentBootScriptPath: localPathFromUrl(Qt.resolvedUrl("../scripts/current_boot_epoch.sh"))
+    readonly property string steadyNowScriptPath: localPathFromUrl(Qt.resolvedUrl("../scripts/steady_now_epoch.sh"))
+    readonly property string uptimeScriptPath: localPathFromUrl(Qt.resolvedUrl("../scripts/current_uptime_seconds.sh"))
     readonly property string bootAnchorCommand: "bash \"" + bootAnchorScriptPath + "\""
     readonly property string currentBootCommand: "bash \"" + currentBootScriptPath + "\""
-    // Sound file bundled with the plasmoid — drop any MP3/WAV/OGG here
-    readonly property url beepSoundUrl: Qt.resolvedUrl("../sounds/beep.mp3")
+    readonly property string steadyNowCommand: "bash \"" + steadyNowScriptPath + "\""
+    readonly property string uptimeCommand: "bash \"" + uptimeScriptPath + "\""
+    // Sound files bundled with the plasmoid.
+    // Prefer WAV through SoundEffect (codec-free on most setups), keep MP3 fallback.
+    readonly property url beepSoundWavUrl: Qt.resolvedUrl("../sounds/beep.wav")
+    readonly property url beepSoundMp3Url: Qt.resolvedUrl("../sounds/beep.mp3")
 
     // ── state ────────────────────────────────────────────────────────────────
     property int remainingSeconds: 0
@@ -31,6 +37,13 @@ PlasmoidItem {
     property int anchorEpochSeconds: 0
     property bool anchorReady: false
     readonly property int bootAnchorOffsetSeconds: 10
+    property bool clockInitInFlight: false
+    property bool uptimeQueryInFlight: false
+    property bool monotonicClockReady: false
+    property int monotonicEpochBaseSeconds: 0
+    property int monotonicUptimeBaseSeconds: 0
+    property bool pendingNowEmitWarnings: false
+    property bool pendingResetFinalize: false
 
     property var triggeredWarningSeconds: ({})
 
@@ -130,27 +143,53 @@ PlasmoidItem {
         resetRuntimeState()
     }
 
-    function resetRuntimeState() {
-        triggeredWarningSeconds = ({})
-        // beepBurstTimer.stop()  // removed — burst timer no longer used
-        updateRemainingTime(false)
-        // On launch: silently mark alarms whose time has already passed
+    function finalizeResetRuntimeState() {
+        // On launch/reset: silently mark alarms whose time has already passed.
+        // Keep exact-threshold alarms active so they can still fire.
         const preFired = {}
         parseWarningSecondsList().forEach(function(ws) {
-            if (remainingSeconds <= ws) preFired["" + ws] = true
+            if (remainingSeconds < ws) preFired["" + ws] = true
         })
         if (Object.keys(preFired).length > 0) triggeredWarningSeconds = preFired
         if (anchorReady && remainingSeconds > 0) tickTimer.start()
         else tickTimer.stop()
     }
 
-    function updateRemainingTime(emitWarnings) {
+    function requestCurrentEpochForUpdate(emitWarnings, finalizeResetState) {
+        pendingNowEmitWarnings = pendingNowEmitWarnings || !!emitWarnings
+        pendingResetFinalize = pendingResetFinalize || !!finalizeResetState
+        if (!anchorReady) {
+            updateRemainingTime(pendingNowEmitWarnings)
+            if (pendingResetFinalize) finalizeResetRuntimeState()
+            pendingNowEmitWarnings = false
+            pendingResetFinalize = false
+            return
+        }
+        if (!monotonicClockReady) {
+            if (clockInitInFlight) return
+            clockInitInFlight = true
+            steadyNowSource.connectSource(steadyNowCommand)
+            return
+        }
+        if (uptimeQueryInFlight) return
+        uptimeQueryInFlight = true
+        uptimeSource.connectSource(uptimeCommand)
+    }
+
+    function resetRuntimeState() {
+        triggeredWarningSeconds = ({})
+        tickTimer.stop()
+        requestCurrentEpochForUpdate(false, true)
+    }
+
+    function updateRemainingTime(emitWarnings, nowEpochSeconds) {
         if (!anchorReady) {
             remainingSeconds = totalSeconds
             previousRemainingSeconds = totalSeconds
             return
         }
-        const now = Math.floor(Date.now() / 1000)
+        let now = parseInt(nowEpochSeconds, 10)
+        if (isNaN(now) || now <= 0) now = Math.floor(Date.now() / 1000)
         const elapsed = Math.max(0, now - anchorEpochSeconds)
         const next = Math.max(0, totalSeconds - elapsed)
         if (emitWarnings) checkWarnings(previousRemainingSeconds, next)
@@ -165,7 +204,7 @@ PlasmoidItem {
         parseWarningSecondsList().forEach(function(ws) {
             const key = "" + ws
             if (triggeredWarningSeconds[key]) return
-            if (cur <= ws && prev > ws) {
+            if (cur <= ws && prev >= ws) {
                 var copy = Object.assign({}, triggeredWarningSeconds)
                 copy[key] = true
                 triggeredWarningSeconds = copy
@@ -182,6 +221,17 @@ PlasmoidItem {
         beepLockSource.connectSource(cmd)
     }
 
+    function playAlarmBeep() {
+        // Fallback to MediaPlayer if SoundEffect cannot load/play the WAV file.
+        if (beepEffect.status === SoundEffect.Error) {
+            beepPlayer.stop()
+            beepPlayer.play()
+            return
+        }
+        beepEffect.stop()
+        beepEffect.play()
+    }
+
     P5Support.DataSource {
         id: beepLockSource
         engine: "executable"; interval: 0
@@ -189,8 +239,7 @@ PlasmoidItem {
             beepLockSource.disconnectSource(sourceName)
             const out = ((data["stdout"] || "") + "").trim()
             if (out === "LOCKED") {
-                beepPlayer.stop()
-                beepPlayer.play()
+                root.playAlarmBeep()
                 // Remove the lock after 3 seconds so the next alarm can fire
                 beepLockCleanup.start()
             }
@@ -272,7 +321,7 @@ PlasmoidItem {
     Timer {
         id: tickTimer
         interval: 1000; repeat: true; running: false
-        onTriggered: root.updateRemainingTime(true)
+        onTriggered: root.requestCurrentEpochForUpdate(true, false)
     }
 
     // ── data sources ──────────────────────────────────────────────────────────
@@ -295,10 +344,65 @@ PlasmoidItem {
         }
     }
 
+    P5Support.DataSource {
+        id: steadyNowSource
+        engine: "executable"; interval: 0
+        onNewData: function(sourceName, data) {
+            if (sourceName !== root.steadyNowCommand) return
+            if (typeof data["stdout"] === "undefined" && typeof data["exit code"] === "undefined") return
+            const raw = ((data["stdout"] || "") + "").trim()
+            const parsed = parseInt(raw, 10)
+            steadyNowSource.disconnectSource(sourceName)
+            root.monotonicEpochBaseSeconds = (!isNaN(parsed) && parsed > 0)
+                ? parsed
+                : Math.floor(Date.now() / 1000)
+            if (root.uptimeQueryInFlight) return
+            root.uptimeQueryInFlight = true
+            uptimeSource.connectSource(root.uptimeCommand)
+        }
+    }
+
+    P5Support.DataSource {
+        id: uptimeSource
+        engine: "executable"; interval: 0
+        onNewData: function(sourceName, data) {
+            if (sourceName !== root.uptimeCommand) return
+            if (typeof data["stdout"] === "undefined" && typeof data["exit code"] === "undefined") return
+            const raw = ((data["stdout"] || "") + "").trim()
+            const parsed = parseInt(raw, 10)
+            let uptimeNow = (!isNaN(parsed) && parsed >= 0) ? parsed : 0
+            if (!root.monotonicClockReady) {
+                root.monotonicUptimeBaseSeconds = uptimeNow
+                root.monotonicClockReady = true
+            } else if (uptimeNow < root.monotonicUptimeBaseSeconds) {
+                // If uptime appears to go backwards, rebase to avoid negative elapsed time.
+                root.monotonicEpochBaseSeconds = Math.floor(Date.now() / 1000)
+                root.monotonicUptimeBaseSeconds = uptimeNow
+            }
+            const nowEpoch = root.monotonicEpochBaseSeconds
+                + Math.max(0, uptimeNow - root.monotonicUptimeBaseSeconds)
+            const emitWarnings = root.pendingNowEmitWarnings
+            const finalizeResetState = root.pendingResetFinalize
+            root.pendingNowEmitWarnings = false
+            root.pendingResetFinalize = false
+            root.clockInitInFlight = false
+            root.uptimeQueryInFlight = false
+            uptimeSource.disconnectSource(sourceName)
+            root.updateRemainingTime(emitWarnings, nowEpoch)
+            if (finalizeResetState) root.finalizeResetRuntimeState()
+        }
+    }
+
     // ── audio ─────────────────────────────────────────────────────────────────
+    SoundEffect {
+        id: beepEffect
+        source: root.beepSoundWavUrl
+        volume: 1.0
+    }
+
     MediaPlayer {
         id: beepPlayer
-        source: root.beepSoundUrl
+        source: root.beepSoundMp3Url
         audioOutput: AudioOutput { volume: 1.0 }
     }
 
@@ -422,30 +526,31 @@ PlasmoidItem {
                 anchors.centerIn: parent
                 width: Math.min(parent.width, parent.height)
                 height: width
+                readonly property real arcStrokeWidth: Math.max(6, width * 0.07)
                 layer.enabled: true
                 layer.samples: 8
 
                 ShapePath {
-                    strokeWidth: Math.max(6, arcShape.width * 0.07)
+                    strokeWidth: arcShape.arcStrokeWidth
                     strokeColor: Qt.rgba(root.arcColor.r, root.arcColor.g, root.arcColor.b, 0.15)
                     fillColor: "transparent"
                     capStyle: ShapePath.RoundCap
                     PathAngleArc {
                         centerX: arcShape.width / 2; centerY: arcShape.height / 2
-                        radiusX: (arcShape.width - strokeWidth * 2) / 2
+                        radiusX: Math.max(0, (arcShape.width - arcShape.arcStrokeWidth * 2) / 2)
                         radiusY: radiusX
                         startAngle: -225; sweepAngle: 270
                     }
                 }
 
                 ShapePath {
-                    strokeWidth: Math.max(6, arcShape.width * 0.07)
+                    strokeWidth: arcShape.arcStrokeWidth
                     strokeColor: root.arcColor
                     fillColor: "transparent"
                     capStyle: ShapePath.RoundCap
                     PathAngleArc {
                         centerX: arcShape.width / 2; centerY: arcShape.height / 2
-                        radiusX: (arcShape.width - strokeWidth * 2) / 2
+                        radiusX: Math.max(0, (arcShape.width - arcShape.arcStrokeWidth * 2) / 2)
                         radiusY: radiusX
                         startAngle: -225
                         sweepAngle: 270 * root.progressRatio

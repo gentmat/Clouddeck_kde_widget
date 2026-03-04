@@ -12,9 +12,15 @@ KCM.SimpleKCM {
     property alias cfg_durationMinutes: durationMinutes.value
     property string cfg_warningMinutesCsv
     property alias cfg_backgroundOpacity: backgroundOpacity.value
+    property int cfg_durationHoursDefault: 6
+    property int cfg_durationMinutesDefault: 0
+    property string cfg_warningMinutesCsvDefault: "5,1"
+    property int cfg_backgroundOpacityDefault: 35
 
     property bool syncingWarningsModel: false
     property bool updatingCsvFromUi: false
+    property bool mutatingWarningsModel: false
+    property bool alarmsEnabled: true
 
     // ── helpers ──────────────────────────────────────────────────────────────
     function clampMinute(value) {
@@ -37,9 +43,10 @@ KCM.SimpleKCM {
         // Sort descending in the CSV (largest time-before-end first)
         values.sort(function(a, b) { return b - a })
         const nextCsv = values.join(",")
-        if (cfg_warningMinutesCsv === nextCsv) return
+        const finalCsv = alarmsEnabled ? nextCsv : ""
+        if (cfg_warningMinutesCsv === finalCsv) return
         updatingCsvFromUi = true
-        cfg_warningMinutesCsv = nextCsv
+        cfg_warningMinutesCsv = finalCsv
         writeSharedConfig()
     }
 
@@ -60,13 +67,27 @@ KCM.SimpleKCM {
         })
         // Sort descending (largest time-before-end first)
         entries.sort(function(a, b) { return b - a })
-        entries.forEach(function(mv) { warningsModel.append({ minutes: mv }) })
+        if (entries.length === 0) {
+            alarmsEnabled = false
+            warningsModel.append({ minutes: 5 })
+        } else {
+            alarmsEnabled = true
+            entries.forEach(function(mv) { warningsModel.append({ minutes: mv }) })
+        }
         syncingWarningsModel = false
     }
 
     function removeWarning(idx) {
         if (idx < 0 || idx >= warningsModel.count) return
+        if (warningsModel.count <= 1) return
+        mutatingWarningsModel = true
         warningsModel.remove(idx)
+        updateWarningCsv()
+        mutatingWarningsModel = false
+    }
+
+    function enableWarnings() {
+        alarmsEnabled = true
         updateWarningCsv()
     }
 
@@ -77,7 +98,14 @@ KCM.SimpleKCM {
         for (let i = 0; i < warningsModel.count; i++) existing.add(warningsModel.get(i).minutes)
         while (existing.has(mv) && mv < 1440) mv++
         const ins = Math.max(0, Math.min(warningsModel.count, afterIndex + 1))
+        mutatingWarningsModel = true
         warningsModel.insert(ins, { minutes: mv })
+        updateWarningCsv()
+        mutatingWarningsModel = false
+    }
+
+    function clearWarnings() {
+        alarmsEnabled = false
         updateWarningCsv()
     }
 
@@ -120,7 +148,6 @@ KCM.SimpleKCM {
         id: formLayout
         Layout.fillWidth: true
         Layout.maximumWidth: Kirigami.Units.gridUnit * 40
-        anchors.horizontalCenter: parent.horizontalCenter
 
         // ════════════════════════════════════════
         // SECTION: Timer Duration
@@ -192,19 +219,33 @@ KCM.SimpleKCM {
             spacing: Kirigami.Units.largeSpacing
 
             QtControls.Label {
-                text: warningsModel.count > 0 ? i18n("%1 alarm(s) configured", warningsModel.count) : i18n("No alarms configured")
+                text: alarmsEnabled ? i18n("%1 alarm(s) configured", warningsModel.count) : i18n("No alarms configured")
                 opacity: 0.7
                 Layout.fillWidth: true
             }
 
             QtControls.Button {
-                text: i18n("Add Alarm")
-                icon.name: "list-add"
-                onClicked: addWarning(warningsModel.count - 1, 5)
+                text: alarmsEnabled ? i18n("Add Alarm") : i18n("Enable Alarms")
+                icon.name: alarmsEnabled ? "list-add" : "dialog-ok"
+                onClicked: {
+                    if (!alarmsEnabled) {
+                        Qt.callLater(function() { enableWarnings() })
+                        return
+                    }
+                    Qt.callLater(function() { addWarning(warningsModel.count - 1, 5) })
+                }
+            }
+
+            QtControls.Button {
+                text: i18n("Disable Alarms")
+                icon.name: "edit-clear"
+                enabled: alarmsEnabled
+                onClicked: Qt.callLater(function() { clearWarnings() })
             }
         }
 
         ColumnLayout {
+            visible: alarmsEnabled
             Layout.fillWidth: true
             spacing: Kirigami.Units.smallSpacing
 
@@ -242,9 +283,13 @@ KCM.SimpleKCM {
                             valueFromText: function(t) { return parseInt(t, 10) || 0 }
 
                             onValueChanged: {
-                                if (syncingWarningsModel) return
-                                if (minutes !== value) {
-                                    warningsModel.setProperty(index, "minutes", value)
+                                if (syncingWarningsModel || mutatingWarningsModel) return
+                                if (index < 0 || index >= warningsModel.count) return
+                                const nextMinute = clampMinute(value)
+                                const row = warningsModel.get(index)
+                                if (!row) return
+                                if (row.minutes !== nextMinute) {
+                                    warningsModel.setProperty(index, "minutes", nextMinute)
                                     updateWarningCsv()
                                 }
                             }
@@ -260,14 +305,24 @@ KCM.SimpleKCM {
                             icon.name: "list-add"
                             QtControls.ToolTip.text: i18n("Insert alarm after this one")
                             QtControls.ToolTip.visible: hovered
-                            onClicked: addWarning(index, warnSpin.value)
+                            onClicked: {
+                                const idx = index
+                                const seed = warnSpin.value
+                                Qt.callLater(function() { addWarning(idx, seed) })
+                            }
                         }
 
                         QtControls.ToolButton {
                             icon.name: "list-remove"
-                            QtControls.ToolTip.text: i18n("Remove this alarm")
+                            enabled: warningsModel.count > 1
+                            QtControls.ToolTip.text: enabled
+                                ? i18n("Remove this alarm")
+                                : i18n("At least one alarm must remain")
                             QtControls.ToolTip.visible: hovered
-                            onClicked: removeWarning(index)
+                            onClicked: {
+                                const idx = index
+                                Qt.callLater(function() { removeWarning(idx) })
+                            }
                         }
                     }
                 }

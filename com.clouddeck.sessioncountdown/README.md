@@ -4,7 +4,7 @@ KDE Plasma 6 widget with:
 
 - Configurable countdown duration (hours + minutes)
 - Dynamic warning points (`+` / `-`) in minutes before end
-- Configurable beep length for warnings
+- Warning alarms can be enabled/disabled
 - Boot-aware countdown anchor logic
 - Transparent display and responsive auto-sized timer text
 
@@ -14,7 +14,7 @@ KDE Plasma 6 widget with:
 
 ## Version
 
-`1.0`
+`1.2`
 
 ## Author
 
